@@ -294,6 +294,8 @@ css = """
 
 #sources-panel {
     min-width: 400px !important;
+    height: 400px !important;
+    overflow-y: auto !important;
 }
 
 .sources-wrapper {
@@ -301,7 +303,8 @@ css = """
     border-radius: 14px;
     padding: 14px 16px;
     background: rgba(127, 127, 127, 0.06);
-    min-height: 120px;
+    min-height: 100%;
+    box-sizing: border-box;
 }
 
 .sources-title {
@@ -405,7 +408,7 @@ with gr.Blocks(css=css) as demo:
         elem_id="subtitle"
     )
 
-    with gr.Row():
+    with gr.Row(equal_height=True):
         chatbot = gr.Chatbot(
             label="Chat",
             height=400,

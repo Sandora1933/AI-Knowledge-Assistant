@@ -3,9 +3,10 @@ from langchain_chroma import Chroma
 import gradio as gr
 import logging
 import html
+import json
 from dotenv import load_dotenv
 
-from prompts import build_rag_prompt
+from prompts import build_judge_prompt, build_rag_prompt
 
 load_dotenv()
 
@@ -27,7 +28,12 @@ NUM_RESULTS = 5
 embeddings_model = OpenAIEmbeddings(model="text-embedding-3-large")
 
 llm = ChatOpenAI(
-    temperature=0.5,
+    temperature=0.1,
+    model="gpt-4o-mini",
+)
+
+judge_llm = ChatOpenAI(
+    temperature=0,
     model="gpt-4o-mini",
 )
 
@@ -89,6 +95,24 @@ def _build_sources_html(docs):
 
     parts.append("</div>")
     return "".join(parts)
+
+
+def _build_confidence_html(judge_result):
+    score = judge_result.get("confidence_score")
+    reason = html.escape(judge_result.get("reason", ""))
+
+    if score is None:
+        score_display = "N/A"
+    else:
+        score_display = f"{score}%"
+
+    return f"""
+    <div class="confidence-box">
+        <div class="confidence-title">Answer Support Confidence</div>
+        <div class="confidence-score">{score_display}</div>
+        <div class="confidence-reason">{reason}</div>
+    </div>
+    """
 
 
 def _build_knowledge(docs):
@@ -182,8 +206,13 @@ def respond(message, history):
         if not final_message:
             final_message = "I could not generate an answer."
 
+        judge_result = evaluate_answer_support(final_message, docs)
+        confidence_html = _build_confidence_html(judge_result)
+
+        final_sources_html = confidence_html + sources_html
+
         updated_history[-1]["content"] = final_message
-        yield updated_history, sources_html
+        yield updated_history, final_sources_html
 
     except Exception as e:
         logging.error(f"LLM error: {e}")
@@ -200,6 +229,51 @@ def clear_chat():
     """
     return [], empty_sources, ""
 
+
+def evaluate_answer_support(answer, docs):
+    normalized_answer = _normalize_whitespace(answer)
+
+    if "no relevant information found in documents" in normalized_answer.lower():
+        return {
+            "confidence_score": None,
+            "reason": "The assistant explicitly reported that no relevant information was found."
+        }
+
+    if not docs:
+        return {
+            "confidence_score": None,
+            "reason": "No retrieved chunks available for evaluation."
+        }
+
+    judge_prompt = build_judge_prompt(answer, docs)
+
+    try:
+        response = judge_llm.invoke(judge_prompt)
+        content = response.content.strip()
+
+        parsed = json.loads(content)
+
+        confidence_score = parsed.get("confidence_score")
+        reason = parsed.get("reason", "")
+
+        if confidence_score is not None:
+            try:
+                confidence_score = int(confidence_score)
+                confidence_score = max(0, min(100, confidence_score))
+            except Exception:
+                confidence_score = None
+
+        return {
+            "confidence_score": confidence_score,
+            "reason": reason
+        }
+
+    except Exception as e:
+        logging.error(f"Judge LLM error: {e}")
+        return {
+            "confidence_score": None,
+            "reason": "Support evaluation failed."
+        }
 
 # ----------------------------
 # UI / CSS
@@ -288,6 +362,32 @@ css = """
     opacity: 0.72;
     font-size: 0.9rem;
     margin-top: 8px;
+}
+
+.confidence-box {
+    border: 1px solid rgba(120, 120, 120, 0.22);
+    border-radius: 14px;
+    padding: 14px 16px;
+    background: rgba(127, 127, 127, 0.08);
+    margin-bottom: 14px;
+}
+
+.confidence-title {
+    font-weight: 700;
+    margin-bottom: 8px;
+    font-size: 1rem;
+}
+
+.confidence-score {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.confidence-reason {
+    opacity: 0.85;
+    line-height: 1.45;
+    font-size: 0.95rem;
 }
 """
 
